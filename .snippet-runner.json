@@ -1,0 +1,11 @@
+{
+  "extra_packages": [
+    {
+      "url": "https://github.com/swift-loggers/swift-logger.git",
+      "branch": "main",
+      "products": [
+        {"name": "LoggerLibrary", "package": "swift-logger"}
+      ]
+    }
+  ]
+}

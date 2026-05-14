@@ -1,0 +1,42 @@
+{
+  "originHash" : "df7d723f4172920fbb581d5e98a2806fdd4ac0dc8d006e0ecc5e92b28bfcb396",
+  "pins" : [
+    {
+      "identity" : "swift-docc-plugin",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-docc-plugin.git",
+      "state" : {
+        "revision" : "647c708be89f834fa6a6d4945442793a77ddf5b6",
+        "version" : "1.5.0"
+      }
+    },
+    {
+      "identity" : "swift-docc-symbolkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-docc-symbolkit",
+      "state" : {
+        "revision" : "b45d1f2ed151d057b54504d653e0da5552844e34",
+        "version" : "1.0.0"
+      }
+    },
+    {
+      "identity" : "swift-logger",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swift-loggers/swift-logger.git",
+      "state" : {
+        "revision" : "75d2b51e15b69e7488b5cc6cb21278ebf3bde12b",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "swift-logger-persistence",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swift-loggers/swift-logger-persistence.git",
+      "state" : {
+        "revision" : "62bd6d51dc18ebd697601c4c863928a665769016",
+        "version" : "0.1.0"
+      }
+    }
+  ],
+  "version" : 3
+}
