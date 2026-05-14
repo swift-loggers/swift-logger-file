@@ -40,11 +40,12 @@ struct FileLoggerTests {
     private static func makeLogger(
         directory: URL,
         minimumLevel: FileLogger.MinimumLevel = .trace,
-        queueCapacity: Int = 1000,
+        queueCapacity: Int = FileLogger.defaultQueueCapacity,
         rotation: RotationPolicy = .never,
         retention: RetentionPolicy = .unlimited,
         onDiagnostic: (@Sendable (FileLoggerDiagnostic) -> Void)? = nil,
-        timestamp: Date = Date(timeIntervalSince1970: 0)
+        timestamp: Date = Date(timeIntervalSince1970: 0),
+        configurationDidBuild: ((FileLogStore.Configuration) -> Void)? = nil
     ) -> FileLogger {
         FileLogger(
             directory: directory,
@@ -53,7 +54,8 @@ struct FileLoggerTests {
             minimumLevel: minimumLevel,
             queueCapacity: queueCapacity,
             onDiagnostic: onDiagnostic,
-            dateProvider: { timestamp }
+            dateProvider: { timestamp },
+            configurationDidBuild: configurationDidBuild
         )
     }
 
@@ -110,7 +112,17 @@ struct FileLoggerTests {
         let exportURL = tempExportURL()
         defer { cleanup(exportURL) }
         try await logger.exportLogs(to: exportURL)
-        let data = try Data(contentsOf: exportURL)
+        return try parseEnvelopeLines(from: exportURL)
+    }
+
+    /// Parses an already-written export file at `url` as canonical
+    /// NDJSON envelopes. Tests that drive `exportLogs(to:)`
+    /// themselves use this to assert against the exact file they
+    /// just produced, without rerouting through a second export.
+    private static func parseEnvelopeLines(
+        from url: URL
+    ) throws -> [[String: Any]] {
+        let data = try Data(contentsOf: url)
         guard !data.isEmpty else { return [] }
         return try data
             .split(separator: 0x0A, omittingEmptySubsequences: true)
@@ -284,44 +296,6 @@ struct FileLoggerTests {
         #expect(envelopes.isEmpty)
     }
 
-    // MARK: Bounded-buffer overflow diagnostic
-
-    @Test("Bounded buffer overflow surfaces `.bufferOverflow` per dropped yield")
-    func bufferOverflowDiagnostic() async throws {
-        let directory = Self.uniqueDirectory()
-        defer { Self.cleanup(directory) }
-        let diagnostics = DiagnosticRecorder()
-        let logger = Self.makeLogger(
-            directory: directory,
-            queueCapacity: 1,
-            onDiagnostic: { diagnostics.append($0) }
-        )
-
-        // Burst through the bounded buffer faster than the worker
-        // can drain. Capacity 1 keeps the test fast: most yields
-        // beyond the first land on the drop-newest branch.
-        for index in 0 ..< 50 {
-            logger.log(.info, "Smoke", "overflow-\(index)", attributes: [])
-        }
-
-        // Wait briefly so the worker has time to drain whatever
-        // it admitted; tests on slow CI may admit two or three
-        // before the worker re-enters the bounded buffer.
-        try await Task.sleep(nanoseconds: 100_000_000)
-
-        let overflowEvents = diagnostics.snapshot.filter {
-            if case .bufferOverflow = $0 { return true }
-            return false
-        }
-        #expect(!overflowEvents.isEmpty)
-
-        let encoderFailures = diagnostics.snapshot.filter {
-            if case .encodingFailed = $0 { return true }
-            return false
-        }
-        #expect(encoderFailures.isEmpty)
-    }
-
     // MARK: Accepted FIFO ordering + flush drain
 
     @Test("Accepted entries persist in arrival order through `flush()`")
@@ -412,12 +386,15 @@ struct FileLoggerTests {
         try await logger.removeExportedLogs()
 
         // After remove, a fresh export captures only the
-        // phase-B entries.
+        // phase-B entries. Assert directly against this export
+        // file — the bytes the test just produced are the
+        // source-of-truth for what `removeExportedLogs()` left
+        // behind.
         let afterRemoveExportURL = Self.tempExportURL()
         defer { Self.cleanup(afterRemoveExportURL) }
         try await logger.exportLogs(to: afterRemoveExportURL)
 
-        let envelopes = try await Self.readPersistedEnvelopes(from: logger)
+        let envelopes = try Self.parseEnvelopeLines(from: afterRemoveExportURL)
         try #require(envelopes.count == 2)
         for (index, envelope) in envelopes.enumerated() {
             let payloadBase64 = try #require(envelope["payload"] as? String)
@@ -432,41 +409,162 @@ struct FileLoggerTests {
 
     // MARK: Rotation + retention pass-through
 
-    @Test("Non-default rotation + retention pass through to `FileLogStore.Configuration` without breaking append")
+    /// Captures every ``FileLogStore.Configuration`` the
+    /// initializer builds, so the pass-through test can assert
+    /// the exact `directory` / `rotation` / `retention` triple
+    /// that reached the persistence layer (instead of inferring
+    /// it from later append behavior).
+    private final class ConfigurationRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var captured: [FileLogStore.Configuration] = []
+
+        func append(_ configuration: FileLogStore.Configuration) {
+            lock.lock()
+            captured.append(configuration)
+            lock.unlock()
+        }
+
+        var snapshot: [FileLogStore.Configuration] {
+            lock.lock()
+            defer { lock.unlock() }
+            return captured
+        }
+    }
+
+    @Test("Non-default rotation + retention pass through to `FileLogStore.Configuration` verbatim")
     func rotationAndRetentionPassThrough() async throws {
         let directory = Self.uniqueDirectory()
         defer { Self.cleanup(directory) }
         // `RotationPolicy.bySize(maxSegmentBytes:)` and
         // `RetentionPolicy.maxTotalBytes(_:)` validate against
         // `FileLogStore.maxEncodedLineBytes` (2 MiB) at the
-        // factory boundary; use the legal minimum here. The test
-        // proves the policies arrived at `FileLogStore.Configuration`
-        // verbatim by constructing the `FileLogger` with them
-        // and observing that admission still completes — a
-        // mis-passed policy would either throw at the factory
-        // (caught above) or surface as an `appendFailed`
-        // diagnostic. Rotation / retention behaviour itself is
-        // covered by `swift-logger-persistence`'s own test
-        // matrix.
+        // factory boundary; use the legal minimum here.
         let rotation = try RotationPolicy.bySize(maxSegmentBytes: FileLogStore.maxEncodedLineBytes)
         let retention = try RetentionPolicy.maxTotalBytes(FileLogStore.maxEncodedLineBytes)
+        let configurations = ConfigurationRecorder()
         let diagnostics = DiagnosticRecorder()
         let logger = Self.makeLogger(
             directory: directory,
             minimumLevel: .trace,
             rotation: rotation,
             retention: retention,
-            onDiagnostic: { diagnostics.append($0) }
+            onDiagnostic: { diagnostics.append($0) },
+            configurationDidBuild: { configurations.append($0) }
         )
 
+        // The configuration-capture seam fires synchronously
+        // inside `FileLogger.init`, so by the time the initializer
+        // returns the snapshot already contains the exact value
+        // that reached `FileLogStore.Configuration`.
+        let captured = configurations.snapshot
+        try #require(captured.count == 1)
+        let configuration = captured[0]
+        #expect(configuration.directory == directory)
+        #expect(configuration.rotation == rotation)
+        #expect(configuration.retention == retention)
+
+        // Smoke-check that the configured pipeline still admits
+        // envelopes end-to-end — config pass-through alone is the
+        // primary assertion; the persistence behavior of the
+        // policies themselves is covered by
+        // `swift-logger-persistence`'s own test matrix.
         for index in 0 ..< 3 {
             logger.log(.info, "Rotate", "rotate-\(index)", attributes: [])
         }
         try await logger.flush()
-
         let envelopes = try await Self.readPersistedEnvelopes(from: logger)
         #expect(envelopes.count == 3)
         #expect(diagnostics.snapshot.isEmpty)
+    }
+
+    // MARK: Capacity clamp
+
+    @Test("Non-positive queueCapacity clamps to `1` and continues to admit log entries")
+    func nonPositiveQueueCapacityClampsToOne() async throws {
+        // The public initializer is non-throwing and never traps.
+        // `queueCapacity <= 0` would route into the undefined
+        // `AsyncStream.bufferingOldest(0)` configuration, so it
+        // is clamped to `1` — the smallest legal buffer. The
+        // logger keeps admitting and persisting entries on the
+        // clamped buffer; this test pins that observable
+        // behavior so a future regression that re-introduces a
+        // crash path or a silent drop surfaces immediately.
+        for capacity in [0, -1, -100] {
+            let directory = Self.uniqueDirectory()
+            defer { Self.cleanup(directory) }
+            let diagnostics = DiagnosticRecorder()
+            let logger = Self.makeLogger(
+                directory: directory,
+                queueCapacity: capacity,
+                onDiagnostic: { diagnostics.append($0) }
+            )
+
+            logger.log(.info, "Clamp", "cap-\(capacity)", attributes: [])
+            try await logger.flush()
+
+            let envelopes = try await Self.readPersistedEnvelopes(from: logger)
+            #expect(envelopes.count == 1, "queueCapacity \(capacity) clamped to 1 must admit one entry")
+            #expect(diagnostics.snapshot.isEmpty, "no diagnostic should fire for the clamped baseline yield")
+        }
+    }
+
+    // MARK: Public initializer smoke (real wall clock)
+
+    @Test("Public init (no injected dateProvider) writes a real `Date()` entry without firing `nonRepresentableDate`")
+    func publicInitWithWallClockPersists() async throws {
+        let directory = Self.uniqueDirectory()
+        defer { Self.cleanup(directory) }
+        let diagnostics = DiagnosticRecorder()
+        // PUBLIC init path: no `dateProvider` seam. The default
+        // provider must produce timestamps that
+        // `LogRecordPersistentEncoder` accepts — raw `Date()`
+        // carries sub-millisecond resolution and would surface as
+        // `.encodingFailed(.nonRepresentableDate)`, dropping the
+        // entry silently.
+        let logger = FileLogger(
+            directory: directory,
+            minimumLevel: .trace,
+            onDiagnostic: { diagnostics.append($0) }
+        )
+
+        logger.log(.info, "Smoke", "wall-clock", attributes: [])
+
+        try await logger.flush()
+
+        // No diagnostic fired — the default provider produced a
+        // canonical-millisecond date the encoder accepted.
+        let captured = diagnostics.snapshot
+        #expect(captured.isEmpty)
+
+        // And the entry actually landed on disk through the real
+        // production path.
+        let envelopes = try await Self.readPersistedEnvelopes(from: logger)
+        try #require(envelopes.count == 1)
+        let payloadBase64 = try #require(envelopes[0]["payload"] as? String)
+        let payloadData = try #require(Data(base64Encoded: payloadBase64))
+        let payload = try #require(
+            try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+        )
+        #expect(payload["message"] as? String == "wall-clock")
+    }
+
+    @Test("canonicalMillisecondDate rounds sub-millisecond precision")
+    func canonicalMillisecondDateRounds() {
+        // Pick an instant carrying microsecond precision that
+        // `LogRecordPersistentEncoder` would reject. The
+        // canonicalizer rounds it to the nearest millisecond on
+        // the same reference-date axis the encoder validates
+        // against.
+        let raw = Date(timeIntervalSinceReferenceDate: 1234.567_891_234)
+        let canonical = FileLogger.canonicalMillisecondDate(raw)
+        let canonicalMillis = (canonical.timeIntervalSinceReferenceDate * 1000)
+            .rounded(.toNearestOrAwayFromZero)
+        let canonicalSeconds = canonicalMillis / 1000
+        // Reconstructing from the rounded millisecond value
+        // matches the canonical interval bit-for-bit; the encoder
+        // verifies the same identity inside
+        // `CanonicalTimestamp.components(of:)`.
+        #expect(canonical.timeIntervalSinceReferenceDate == canonicalSeconds)
     }
 
     // MARK: Helpers

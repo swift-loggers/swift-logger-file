@@ -2,9 +2,9 @@
   "extra_packages": [
     {
       "url": "https://github.com/swift-loggers/swift-logger.git",
-      "branch": "main",
+      "upToNextMinor": "0.1.0",
       "products": [
-        {"name": "LoggerLibrary", "package": "swift-logger"}
+        {"name": "Loggers", "package": "swift-logger"}
       ]
     }
   ]

@@ -8,11 +8,12 @@ built on top of
 `LogRecordPersistentEncoder`, and persists the resulting
 `PersistentLogEnvelope` to a host-owned `FileLogStore` directory.
 The logger is **local only**: there is no network, no remote
-retry, and no upload of any kind. Persistent records survive
-process restart and can be exported to a single byte-stable
-NDJSON file through the caller-driven `exportLogs(to:)` /
-`removeExportedLogs()` lifecycle for diagnostic / support-bundle
-collection.
+retry, and no upload of any kind. Export is strictly
+caller-driven through `exportLogs(to:)`. Persistent records
+survive process restart and can be exported to a single
+byte-stable NDJSON file through the caller-driven
+`exportLogs(to:)` / `removeExportedLogs()` lifecycle for
+diagnostic / support-bundle collection.
 
 > **`0.1.0` public API surface (final, locked):**
 >
@@ -57,9 +58,8 @@ encoder; keep those names non-sensitive and PII-free.
 ## Installation
 
 Add this package and the core `swift-loggers/swift-logger`
-package (`LoggerLibrary`) to your `Package.swift`. All three
-products pin to their `0.1.x` SemVer line through
-`.upToNextMinor(from: "0.1.0")`.
+package (`Loggers`) to your `Package.swift`. Both products pin
+to their `0.1.x` SemVer line through `.upToNextMinor(from: "0.1.0")`.
 
 ```swift
 // In your Package.swift:
@@ -80,7 +80,7 @@ let package = Package(
             name: "MyApp",
             dependencies: [
                 .product(name: "LoggerFile", package: "swift-logger-file"),
-                .product(name: "LoggerLibrary", package: "swift-logger")
+                .product(name: "Loggers", package: "swift-logger")
             ]
         )
     ]
@@ -94,7 +94,7 @@ let package = Package(
 ```swift
 import Foundation
 import LoggerFile
-import LoggerLibrary
+import Loggers
 
 let logDirectory = FileManager.default.urls(
     for: .applicationSupportDirectory,
@@ -124,7 +124,6 @@ message or attributes autoclosures.
 ```swift
 import Foundation
 import LoggerFile
-import LoggerLibrary
 
 func collectSupportBundle(
     logger: FileLogger,
@@ -144,9 +143,9 @@ func collectSupportBundle(
 
     // `removeExportedLogs()` deletes only the persistence bytes
     // that were captured by the most recent successful
-    // `exportLogs(to:)` boundary. Envelopes appended after the
-    // export survive the removal; call this after the user
-    // confirms the support bundle was uploaded successfully.
+    // `exportLogs(to:)` boundary after the caller confirms export
+    // handling. Envelopes appended after the export survive the
+    // removal.
     try await logger.removeExportedLogs()
 }
 ```
@@ -161,7 +160,7 @@ decoding is required to support a diagnostic workflow.
 ```swift
 import Foundation
 import LoggerFile
-import LoggerLibrary
+import Loggers
 
 let logDirectory = FileManager.default.urls(
     for: .applicationSupportDirectory,
@@ -188,8 +187,8 @@ let logger = FileLogger(
         case let .appendFailed(error):
             // `FileLogStore.append(_:)` threw after the envelope
             // was already admitted to the worker. The envelope
-            // is dropped; the logger keeps processing later
-            // entries on the same instance.
+            // is dropped without replay; the logger keeps
+            // processing later entries on the same instance.
             counter.recordAppendFailure(error)
         }
     }
@@ -219,8 +218,13 @@ final class OverflowCounter: @unchecked Sendable {
 ```
 
 `Logger.log` stays synchronous and infallible regardless of which
-signals fire. Diagnostics are advisory; they do not change the
-adapter's drop-newest contract.
+signals fire. The caller-driven lifecycle methods —
+`flush()`, `exportLogs(to:)`, and `removeExportedLogs()` — are
+explicit `async throws` calls and may suspend on persistence
+I/O (worker drain, `FileLogStore.flush()`, export write,
+removal compaction); the synchronous-and-infallible guarantee
+applies only to `Logger.log`. Diagnostics are advisory; they do
+not change the adapter's drop-newest contract.
 
 ## Related packages
 

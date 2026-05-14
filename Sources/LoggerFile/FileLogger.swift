@@ -32,7 +32,7 @@ import Loggers
 /// task cannot keep up (slow disk, exhausted I/O) the worker
 /// keeps the oldest accepted envelopes moving and **drops new
 /// envelopes on the producer side** once the buffer hits its
-/// capacity (1000 envelopes by default). The bounded-buffer drop
+/// capacity (``defaultQueueCapacity`` envelopes by default). The bounded-buffer drop
 /// is observable through
 /// ``FileLoggerDiagnostic/bufferOverflow``; encoder failures and
 /// post-accept `FileLogStore.append(_:)` failures are observable
@@ -106,6 +106,13 @@ public struct FileLogger: Loggers.Logger {
         public static let defaultLevel = MinimumLevel.warning
     }
 
+    /// The default upper bound on the worker's bounded buffer
+    /// used when the public initializer's `queueCapacity`
+    /// parameter is omitted. Single source of truth for both the
+    /// public init's default value and the internal worker's
+    /// stream-buffering capacity, so the two cannot drift.
+    public static let defaultQueueCapacity = 1000
+
     /// The drop-guard threshold for this logger. Entries whose
     /// severity is strictly lower than this value -- and entries
     /// at `LoggerLevel.disabled` -- are dropped without
@@ -138,7 +145,11 @@ public struct FileLogger: Loggers.Logger {
     ///     buffer. New yields beyond this capacity are dropped
     ///     and observed via
     ///     ``FileLoggerDiagnostic/bufferOverflow``. Defaults to
-    ///     `1000`.
+    ///     ``defaultQueueCapacity``. Non-positive values are
+    ///     clamped to `1` — the public initializer is
+    ///     non-throwing and never traps, so an unusable
+    ///     `AsyncStream.bufferingOldest(0)` configuration is
+    ///     normalized to the smallest legal buffer instead.
     ///   - onDiagnostic: Optional observer for
     ///     ``FileLoggerDiagnostic`` signals (encoder failures,
     ///     bounded-buffer overflow, post-accept append
@@ -151,7 +162,7 @@ public struct FileLogger: Loggers.Logger {
         rotation: RotationPolicy = .never,
         retention: RetentionPolicy = .unlimited,
         minimumLevel: MinimumLevel = .defaultLevel,
-        queueCapacity: Int = 1000,
+        queueCapacity: Int = FileLogger.defaultQueueCapacity,
         onDiagnostic: (@Sendable (FileLoggerDiagnostic) -> Void)? = nil
     ) {
         self.init(
@@ -161,36 +172,76 @@ public struct FileLogger: Loggers.Logger {
             minimumLevel: minimumLevel,
             queueCapacity: queueCapacity,
             onDiagnostic: onDiagnostic,
-            dateProvider: { Date() }
+            dateProvider: FileLogger.canonicalMillisecondDateProvider()
         )
     }
 
-    /// Test-only initializer that swaps the wall-clock source for
-    /// an injected deterministic provider. Internal so production
-    /// callers cannot depend on the seam.
+    /// Builds the default wall-clock provider used by the public
+    /// initializer. Rounds each `Date()` reading to the
+    /// canonical RFC 3339 millisecond profile required by
+    /// `LogRecordPersistentEncoder`; a raw `Date()` carries
+    /// sub-millisecond resolution that the encoder rejects as
+    /// ``LogRecordPersistentEncoderError/nonRepresentableDate``,
+    /// which would route every production entry through
+    /// ``FileLoggerDiagnostic/encodingFailed(_:)`` and silently
+    /// drop it.
+    static func canonicalMillisecondDateProvider() -> @Sendable () -> Date {
+        { canonicalMillisecondDate(Date()) }
+    }
+
+    /// Rounds `date` to the canonical RFC 3339 millisecond
+    /// profile required by `LogRecordPersistentEncoder`.
+    static func canonicalMillisecondDate(_ date: Date) -> Date {
+        let interval = date.timeIntervalSinceReferenceDate
+        guard interval.isFinite else { return date }
+        let millis = (interval * 1000).rounded(.toNearestOrAwayFromZero)
+        guard millis.isFinite else { return date }
+        return Date(timeIntervalSinceReferenceDate: millis / 1000)
+    }
+
+    /// Test-only initializer that swaps the wall-clock source
+    /// for an injected deterministic provider and exposes a
+    /// configuration-capture seam. Internal so production callers
+    /// cannot depend on either seam.
+    ///
+    /// The `configurationDidBuild` closure, when non-nil, is
+    /// invoked synchronously with the exact
+    /// ``LoggerFilePersistence/FileLogStore/Configuration``
+    /// value that this initializer builds and hands to the
+    /// underlying `FileLogStore`. Tests use it to assert pass-
+    /// through of `directory` / `rotation` / `retention` without
+    /// relying on side-effect observation through later append
+    /// behavior.
     init(
         directory: URL,
         rotation: RotationPolicy = .never,
         retention: RetentionPolicy = .unlimited,
         minimumLevel: MinimumLevel = .defaultLevel,
-        queueCapacity: Int = FileLoggerWorker.defaultQueueCapacity,
+        queueCapacity: Int = FileLogger.defaultQueueCapacity,
         onDiagnostic: (@Sendable (FileLoggerDiagnostic) -> Void)? = nil,
-        dateProvider: @escaping @Sendable () -> Date
+        dateProvider: @escaping @Sendable () -> Date,
+        configurationDidBuild: ((FileLogStore.Configuration) -> Void)? = nil
     ) {
         self.minimumLevel = minimumLevel
         self.dateProvider = dateProvider
         self.onDiagnostic = onDiagnostic
         encoder = LogRecordPersistentEncoder()
-        let store = FileLogStore(
-            configuration: FileLogStore.Configuration(
-                directory: directory,
-                rotation: rotation,
-                retention: retention
-            )
+        // Non-positive capacity would route into
+        // `AsyncStream.bufferingOldest(0)` which is an undefined
+        // configuration — clamp to the smallest legal buffer
+        // (`1`) so the public initializer can stay non-throwing
+        // and never trap.
+        let normalizedQueueCapacity = max(queueCapacity, 1)
+        let configuration = FileLogStore.Configuration(
+            directory: directory,
+            rotation: rotation,
+            retention: retention
         )
+        configurationDidBuild?(configuration)
+        let store = FileLogStore(configuration: configuration)
         let worker = FileLoggerWorker(
             store: store,
-            queueCapacity: queueCapacity,
+            queueCapacity: normalizedQueueCapacity,
             onDiagnostic: onDiagnostic
         )
         storage = FileLoggerStorage(store: store, worker: worker)
@@ -275,10 +326,14 @@ final class FileLoggerStorage: @unchecked Sendable {
     }
 
     deinit {
-        // Finish the worker's stream so the consumer task drains
-        // any in-flight envelope and exits cooperatively.
-        // Outstanding barriers resume immediately so a caller
-        // awaiting `flush()` during teardown does not hang.
+        // Close the producer side of the worker's stream so
+        // future `enqueue(_:)` calls observe `.terminated` and
+        // drop. Envelopes that the bounded buffer already
+        // admitted before this point keep draining through the
+        // consumer task; the task exits its `for await` loop
+        // only after the buffer is empty, then releases any
+        // outstanding `drainBarrier()` callers via
+        // `FileLoggerWorkerState.resumeAllBarriersAtStreamFinish()`.
         worker.finish()
     }
 }
