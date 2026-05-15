@@ -1,0 +1,11 @@
+{
+  "extra_packages": [
+    {
+      "url": "https://github.com/swift-loggers/swift-logger.git",
+      "upToNextMinor": "0.1.0",
+      "products": [
+        {"name": "Loggers", "package": "swift-logger"}
+      ]
+    }
+  ]
+}

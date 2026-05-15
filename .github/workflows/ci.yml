@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Change detection -- skip expensive CI for draft PRs and for
+  # changes that do not touch code, configs, or workflows.
+  changes:
+    name: Detect Changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      code_relevant: ${{ steps.filter.outputs.code_relevant }}
+      docs_relevant: ${{ steps.filter.outputs.docs_relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Two filters so a `README.md`-only PR triggers the DocC
+          # gate (and only the DocC gate). Workflow files appear in
+          # both filters because they can affect either pipeline.
+          filters: |
+            code_relevant:
+              - 'Package.swift'
+              - 'Package.resolved'
+              - 'Sources/**'
+              - 'Tests/**'
+              - '.github/workflows/**'
+              - '.swiftformat'
+              - '.swiftlint.yml'
+              - '.swift-version'
+              - '.periphery.yml'
+            docs_relevant:
+              - 'README.md'
+              - '.github/workflows/**'
+
+  lint:
+    name: Lint
+    needs: changes
+    if: needs.changes.outputs.code_relevant == 'true' || github.event.action == 'ready_for_review'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tool versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Install SwiftFormat and SwiftLint
+        run: brew install swiftformat swiftlint
+
+      - name: Lint tool versions
+        run: |
+          swiftformat --version
+          swiftlint version
+
+      - name: SwiftFormat lint
+        run: swiftformat --lint . --config .swiftformat
+
+      - name: SwiftLint strict
+        run: swiftlint --strict
+
+      - name: Build (verbose) for SwiftLint analyzer
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests -v 2>&1 | tee build.log
+
+      - name: SwiftLint analyze (analyzer rules)
+        run: swiftlint analyze --compiler-log-path build.log --strict
+
+      - name: Whitespace check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --depth=1 origin "${{ github.base_ref }}"
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git diff --check "${{ github.event.before }}" "${{ github.sha }}"
+          fi
+
+  test:
+    name: Test (strict concurrency)
+    needs: changes
+    if: needs.changes.outputs.code_relevant == 'true' || github.event.action == 'ready_for_review'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Test
+        run: swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+
+  build-release:
+    name: Build (release)
+    needs: changes
+    if: needs.changes.outputs.code_relevant == 'true' || github.event.action == 'ready_for_review'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build release
+        run: swift build -c release -Xswiftc -warnings-as-errors
+
+  periphery:
+    name: Periphery (unused code)
+    needs: changes
+    if: needs.changes.outputs.code_relevant == 'true' || github.event.action == 'ready_for_review'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+
+      - name: Periphery tool version
+        run: periphery version
+
+      - name: Periphery scan
+        run: periphery scan
+
+  library-evolution:
+    name: Build (library evolution)
+    needs: changes
+    if: needs.changes.outputs.code_relevant == 'true' || github.event.action == 'ready_for_review'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build with library evolution
+        run: swift build -Xswiftc -enable-library-evolution -Xswiftc -emit-module-interface -Xswiftc -warnings-as-errors
+
+  docc:
+    name: DocC (${{ matrix.product }})
+    needs: changes
+    # DocC additionally fires for docs-only PRs (e.g. README) so a
+    # docs change still validates that the generated documentation
+    # builds. Other jobs gate on `code_relevant` only.
+    if: github.event_name == 'pull_request' && (needs.changes.outputs.code_relevant == 'true' || needs.changes.outputs.docs_relevant == 'true' || github.event.action == 'ready_for_review')
+    runs-on: macos-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [LoggerFile]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: DocC build
+        run: |
+          DOCS_OUTPUT="$(mktemp -d "${RUNNER_TEMP}/docc-output.XXXXXX")"
+          swift package --allow-writing-to-directory "$DOCS_OUTPUT" \
+            generate-documentation \
+            --target ${{ matrix.product }} \
+            --disable-indexing \
+            --transform-for-static-hosting \
+            --hosting-base-path swift-logger-file/${{ matrix.product }} \
+            --output-path "$DOCS_OUTPUT/${{ matrix.product }}" \
+            --warnings-as-errors

@@ -1,0 +1,123 @@
+# swift-loggers SwiftLint configuration
+
+# Excluded paths
+excluded:
+  - .build
+  - .swiftpm
+  - Package.swift
+  - "**/*.docc/**"  # Documentation files can have longer lines
+
+# Opt-in rules (not enabled by default)
+opt_in_rules:
+  - empty_count               # Prefer isEmpty over count == 0
+  - closure_spacing           # Proper spacing in closures
+  - force_unwrapping          # Warn on force unwrap
+
+# Line length
+line_length:
+  warning: 120
+  error: 150
+  ignores_comments: true
+  ignores_urls: true
+
+# Identifier naming
+identifier_name:
+  min_length:
+    error: 2
+  excluded:
+    - id    # Common identifier
+    - to    # Common parameter label
+    - i     # Loop variable
+    - j     # Loop variable
+    - x     # Coordinate
+    - y     # Coordinate
+    - z     # Coordinate (3D)
+    - var   # JavaScript interop, diagnostics
+
+# Type body length
+type_body_length:
+  warning: 300
+  error: 500
+
+# Function body length
+function_body_length:
+  warning: 50
+  error: 100
+
+# File length
+file_length:
+  warning: 500
+  error: 1000
+  ignore_comment_only_lines: true
+
+# Function parameter count
+function_parameter_count:
+  warning: 5
+  error: 8
+
+# Cyclomatic complexity
+cyclomatic_complexity:
+  warning: 10
+  error: 20
+
+# Nesting depth
+nesting:
+  type_level:
+    warning: 2
+  function_level:
+    warning: 5
+
+# Force unwrapping (warning only, not error)
+force_unwrapping: warning
+force_try: warning
+force_cast: warning
+
+# Crash-family calls are banned in all non-excluded Swift files. Tests must
+# surface failures via `throws` and Issue.record, never by crashing the test
+# process. Severity is `error` so violations fail `swiftlint --strict`.
+custom_rules:
+  fatal_error_usage:
+    name: "Fatal Error Usage"
+    regex: '(^|[^A-Za-z0-9_])fatalError\s*\('
+    message: "fatalError crashes the process. Throw, guard, or use Issue.record."
+    severity: error
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string
+  precondition_usage:
+    name: "Precondition Usage"
+    regex: '(^|[^A-Za-z0-9_])precondition\s*\('
+    message: "precondition crashes on failure. Throw, guard, or use Issue.record."
+    severity: error
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string
+  precondition_failure_usage:
+    name: "Precondition Failure Usage"
+    regex: '(^|[^A-Za-z0-9_])preconditionFailure\s*\('
+    message: "preconditionFailure crashes the process. Throw, guard, or use Issue.record."
+    severity: error
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string
+  assert_usage:
+    name: "Assert Usage"
+    regex: '(^|[^A-Za-z0-9_])assert\s*\('
+    message: "assert crashes in debug builds. Throw, guard, or use Issue.record."
+    severity: error
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string
+  assertion_failure_usage:
+    name: "Assertion Failure Usage"
+    regex: '(^|[^A-Za-z0-9_])assertionFailure\s*\('
+    message: "assertionFailure crashes in debug builds. Throw, guard, or use Issue.record."
+    severity: error
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string

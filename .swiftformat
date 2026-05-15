@@ -1,0 +1,233 @@
+--swiftversion 6
+
+# Prefer comma over && in if, guard or while conditions.
+--rules andOperator
+
+# Prefer AnyObject over class in protocol definitions.
+--rules anyObjectProtocol
+
+# Insert blank line before and after MARK: comments.
+--rules blankLinesAroundMark
+
+# Remove trailing blank line at the end of a scope.
+--rules blankLinesAtEndOfScope
+
+# Remove leading blank line at the start of a scope.
+--rules blankLinesAtStartOfScope
+
+# Insert blank line before class, struct, enum, extension, protocol or function declarations.
+--rules blankLinesBetweenScopes
+
+# Wrap braces in accordance with selected style (K&R or Allman).
+--rules braces
+--allman false
+
+# Replace consecutive blank lines with a single blank line.
+--rules consecutiveBlankLines
+
+# Replace consecutive spaces with a single space.
+--rules consecutiveSpaces
+
+# Remove duplicate import statements.
+--rules duplicateImports
+
+# Place else, catch or while keyword in accordance with current style (same or next line).
+--rules elseOnSameLine
+--elseposition same-line
+
+# Remove whitespace inside empty braces.
+--rules emptyBraces
+
+# Converts types used for hosting only static members into enums.
+--rules enumNamespaces
+
+# Configure the placement of an extension's access control keyword.
+--rules extensionAccessControl
+--extensionacl on-declarations
+
+# Reposition let or var bindings within pattern.
+--rules hoistPatternLet
+--patternlet hoist
+
+# Indent code in accordance with the scope level.
+--rules indent
+--indent 4
+--tabwidth 4
+--indentcase false
+--ifdef indent
+--xcodeindentation disabled
+
+# Prefer isEmpty over comparing count against zero.
+--rules isEmpty
+
+# Move leading delimiters to the end of the previous line.
+--rules leadingDelimiters
+
+# Add empty blank line at end of file.
+--rules linebreakAtEndOfFile
+
+# Use specified linebreak character for all linebreaks (CR, LF or CRLF).
+--rules linebreaks
+--linebreaks lf
+
+# Use consistent ordering for member modifiers.
+--rules modifierOrder
+
+# Use consistent grouping for numeric literals. Groups will be separated by _ delimiters to improve readability.
+# For each numeric type you can specify a group size (the number of digits in each group) and a threshold
+# (the minimum number of digits in a number before grouping is applied).
+--rules numberFormatting
+--binarygrouping 4,8
+--decimalgrouping 3,6
+--hexgrouping 2,4
+--octalgrouping 4,8
+--fractiongrouping disabled
+--exponentgrouping enabled
+--hexliteralcase uppercase
+--exponentcase lowercase
+
+# Remove redundant backticks around identifiers.
+--rules redundantBackticks
+
+# Remove redundant break in switch case.
+--rules redundantBreak
+
+# Remove redundant access control modifiers.
+--rules redundantExtensionACL
+
+# Prefer private over fileprivate where equivalent.
+--rules redundantFileprivate
+
+# Remove unneeded get clause inside computed properties.
+--rules redundantGet
+
+# Remove explicit init if not required.
+--rules redundantInit
+
+# Remove redundant let/var from ignored variables.
+--rules redundantLet
+
+# Remove redundant let error from catch clause.
+--rules redundantLetError
+
+# Remove redundant nil default value (Optional vars are nil by default).
+--rules redundantNilInit
+
+# Remove redundant @objc annotations.
+--rules redundantObjc
+
+# Remove redundant parentheses.
+--rules redundantParens
+
+# Remove redundant pattern matching parameter syntax.
+--rules redundantPattern
+
+# Remove redundant raw string values for enum cases.
+--rules redundantRawValues
+
+# Insert/remove explicit self where applicable.
+--rules redundantSelf
+--self remove
+--selfrequired
+
+# Remove redundant type from variable declarations.
+--rules redundantType
+
+# Remove explicit Void return type.
+--rules redundantVoidReturnType
+
+# Remove semicolons.
+--rules semicolons
+--semicolons inline
+
+# Sort import statements alphabetically.
+--rules sortImports
+--importgrouping testable-bottom
+
+# Add or remove space around curly braces.
+--rules spaceAroundBraces
+
+# Add or remove space around square brackets.
+--rules spaceAroundBrackets
+
+# Add space before and/or after comments.
+--rules spaceAroundComments
+
+# Remove space around angle brackets.
+--rules spaceAroundGenerics
+
+# Add or remove space around operators or delimiters.
+--rules spaceAroundOperators
+--operatorfunc spaced
+
+# Add or remove space around parentheses.
+--rules spaceAroundParens
+
+# Add space inside curly braces.
+--rules spaceInsideBraces
+
+# Remove space inside square brackets.
+--rules spaceInsideBrackets
+
+# Add leading and/or trailing space inside comments.
+--rules spaceInsideComments
+
+# Remove space inside angle brackets.
+--rules spaceInsideGenerics
+
+# Remove space inside parentheses.
+--rules spaceInsideParens
+
+# Remove backticks around self in Optional unwrap expressions.
+--rules strongifiedSelf
+
+# Use correct formatting for TODO:, MARK: or FIXME: comments.
+--rules todos
+
+# Use trailing closure syntax where applicable.
+--rules trailingClosures
+--trailingclosures
+
+# Add or remove trailing comma from the last item in a collection literal.
+--rules trailingCommas
+--commas inline
+
+# Remove trailing space at end of a line.
+--rules trailingSpace
+--trimwhitespace always
+
+# Prefer shorthand syntax for Arrays, Dictionaries and Optionals.
+--rules typeSugar
+
+# Mark unused function arguments with _.
+--rules unusedArguments
+--stripunusedargs always
+
+# Use Void for type declarations and () for values.
+--rules void
+--empty void
+
+# Wrap lines that exceed the specified maximum width.
+--rules wrap
+--maxwidth 120
+
+# Align wrapped function arguments or collection elements.
+--rules wrapArguments
+--wraparguments before-first
+--wrapelements before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--wrapconditions after-first
+--closingparen balanced
+
+# Writes one enum case per line.
+--rules wrapEnumCases
+
+# Prefer constant values to be on the right-hand-side of expressions.
+--rules yodaConditions
+
+# Optionally ignore conflict markers (e.g. if they clash with a custom operator)
+--conflictmarkers reject
+
+# Support for formatting partial file fragments
+--fragment false
