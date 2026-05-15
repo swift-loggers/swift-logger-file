@@ -25,6 +25,9 @@ diagnostic / support-bundle collection.
 >   — caller-driven persistent lifecycle.
 > - `FileLoggerDiagnostic` — observable signals: `encodingFailed(_:)`,
 >   `bufferOverflow`, `appendFailed(_:)`.
+> - `FileLogger.defaultQueueCapacity` — public default for the
+>   bounded buffer's capacity (currently `1000`). Non-positive
+>   `queueCapacity:` values are clamped to `1`.
 >
 > `swift-logger-file` only logs locally. Hosts that need remote
 > durable delivery on top of the same persistence layer use
@@ -33,6 +36,9 @@ diagnostic / support-bundle collection.
 
 Requires Swift 6.0+. iOS 13.4, macOS 10.15.4, tvOS 13.4,
 watchOS 6.2, visionOS 1. MIT licensed.
+
+API reference (DocC):
+[swift-loggers.github.io/swift-logger-file](https://swift-loggers.github.io/swift-logger-file/documentation/loggerfile/).
 
 ## Privacy
 
@@ -119,6 +125,15 @@ below the configured `minimumLevel` (and entries at
 `LoggerLevel.disabled`) are dropped without evaluating the
 message or attributes autoclosures.
 
+The lifecycle methods — `flush()`, `exportLogs(to:)`,
+`removeExportedLogs()` — are **not** part of the `Logger`
+protocol surface; they live on `FileLogger` directly. Hold a
+concrete `FileLogger` handle for the lifecycle / export flow and
+pass it through `any Logger` (or another protocol-shaped variable)
+into your logging pipeline in parallel — type-erasing the
+handle into `any Logger` and discarding the original drops
+access to the export API.
+
 ### Caller-driven lifecycle: support-bundle export
 
 ```swift
@@ -155,6 +170,12 @@ The exported file is a sequence of canonical
 redacted payload. Consumers ship the file as-is; no further
 decoding is required to support a diagnostic workflow.
 
+The export is a **file artifact for the host** to surface
+through its own UI (share sheet, mail attachment, upload to a
+support endpoint, etc.); `FileLogger` itself never uploads,
+auto-exports, or otherwise reaches the network — every export
+is initiated by an `exportLogs(to:)` call the host makes.
+
 ### Observing diagnostics
 
 ```swift
@@ -171,7 +192,7 @@ let counter = OverflowCounter()
 let logger = FileLogger(
     directory: logDirectory,
     minimumLevel: .info,
-    queueCapacity: 1000,
+    queueCapacity: FileLogger.defaultQueueCapacity,
     onDiagnostic: { diagnostic in
         switch diagnostic {
         case let .encodingFailed(error):
@@ -225,6 +246,65 @@ I/O (worker drain, `FileLogStore.flush()`, export write,
 removal compaction); the synchronous-and-infallible guarantee
 applies only to `Logger.log`. Diagnostics are advisory; they do
 not change the adapter's drop-newest contract.
+
+`queueCapacity:` defaults to `FileLogger.defaultQueueCapacity`
+(currently `1000`); non-positive values are clamped to `1`, so
+the public initializer is non-throwing and never traps on an
+out-of-range bound.
+
+### Rotation and retention
+
+`rotation:` and `retention:` flow straight through to
+`FileLogStore.Configuration`. The defaults are `.never` /
+`.unlimited` (single segment, no retention deletion). Use the
+persistence package's policy factories when a bounded segment
+topology is required; the two factories shown below validate
+against `FileLogStore.maxEncodedLineBytes` and throw on
+out-of-range inputs at the call site. Other policy factories
+(`RetentionPolicy.maxSegments(_:)`, `RetentionPolicy.maxAge(seconds:)`)
+enforce different bounds — see the persistence package for the
+per-factory contract.
+
+`RotationPolicy`, `RetentionPolicy`, and `FileLogStore` live in
+the `LoggerFilePersistence` module; the import below is only
+needed when host code constructs policy values directly. The
+default install snippet (just `LoggerFile` + `Loggers`) covers
+every usage path that does **not** configure persistence
+policies; the `LoggerFilePersistence` module is already pulled
+into the dependency graph by `LoggerFile`, so no extra product
+needs to be declared in `Package.swift`.
+
+```swift
+import Foundation
+import LoggerFile
+import LoggerFilePersistence
+
+let logDirectory = FileManager.default.urls(
+    for: .applicationSupportDirectory,
+    in: .userDomainMask
+)[0].appendingPathComponent("logs", isDirectory: true)
+
+let rotation = try RotationPolicy.bySize(
+    maxSegmentBytes: 8 * 1024 * 1024  // 8 MiB
+)
+let retention = try RetentionPolicy.maxTotalBytes(
+    256 * 1024 * 1024  // 256 MiB
+)
+
+let logger = FileLogger(
+    directory: logDirectory,
+    rotation: rotation,
+    retention: retention,
+    minimumLevel: .info
+)
+```
+
+The persistence package
+([`swift-loggers/swift-logger-persistence`](https://github.com/swift-loggers/swift-logger-persistence))
+owns the policy contract — segment naming, rotation boundaries,
+retention enforcement, and the validation thresholds for each
+factory. `FileLogger` only forwards the configured policies to
+`FileLogStore.Configuration`.
 
 ## Related packages
 
